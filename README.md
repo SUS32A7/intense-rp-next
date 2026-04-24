@@ -89,6 +89,45 @@ Not the best fit if you:
 - want to run headless on a server
 - want something that never breaks (that's perhaps the biggest caveat)
 
+> [!TIP]
+> Need to run without the PySide6 desktop UI (for example on Termux)?
+> Use the headless runtime entrypoint:
+>
+> ```bash
+> pkg install chromium  # Termux only
+> python headless_main.py
+> ```
+>
+> Then open:
+>
+> ```text
+> http://127.0.0.1:7777/settings
+> ```
+>
+> This headless web dashboard lets you edit persisted settings without the PySide6 desktop app.
+>
+> Full setup guide: [docs/termux-headless-guide.md](docs/termux-headless-guide.md)
+>
+> Optional overrides:
+>
+> ```bash
+> python headless_main.py --host 0.0.0.0 --port 7777
+> ```
+>
+> If a provider asks for CAPTCHA/login challenge, start once in headed mode so you can solve it:
+>
+> ```bash
+> python headless_main.py --headed
+> ```
+>
+> Keep Persistent Sessions enabled, then switch back to normal headless mode.
+>
+> If Chromium lives in a custom path, set:
+>
+> ```bash
+> export IRP_CHROMIUM_EXECUTABLE=/absolute/path/to/chromium
+> ```
+
 > [!NOTE]
 > 1. Provider web apps change. When they do, a driver can break until it's updated.
 > 2. IntenseRP currently processes **one request at a time** (requests are queued). This is on purpose (single live browser session).

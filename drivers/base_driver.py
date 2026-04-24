@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import secrets
 import string
 from abc import ABC, abstractmethod
@@ -673,6 +675,54 @@ class BaseDriver(ABC):
 
         return options
 
+    def _use_headless_browser(self) -> bool:
+        if str(os.environ.get("IRP_HEADED", "")).strip().lower() in {"1", "true", "yes", "on"}:
+            return False
+        if str(os.environ.get("IRP_HEADLESS", "")).strip().lower() in {"0", "false", "no", "off"}:
+            return False
+        return True
+
+    @staticmethod
+    def _is_termux_environment() -> bool:
+        if "TERMUX_VERSION" in os.environ:
+            return True
+        prefix = str(os.environ.get("PREFIX", "")).strip().lower()
+        return "com.termux" in prefix
+
+    @staticmethod
+    def _resolve_termux_chromium_executable() -> str | None:
+        env_override = str(os.environ.get("IRP_CHROMIUM_EXECUTABLE", "")).strip()
+        if env_override:
+            return env_override
+
+        for candidate in ("chromium-browser", "chromium"):
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+
+        return None
+
+    def _get_browser_launch_args(self, *, headless: bool) -> list[str]:
+        launch_args: list[str] = []
+        if headless:
+            launch_args.extend(
+                [
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ]
+            )
+        if self._is_termux_environment():
+            launch_args.extend(
+                [
+                    "--disable-setuid-sandbox",
+                    "--no-zygote",
+                    "--single-process",
+                    "--disable-software-rasterizer",
+                ]
+            )
+        return launch_args
+
     def _get_persistent_profile_dir(self) -> str:
         config_dir = getattr(self.config_manager, "config_dir", None)
         pair = getattr(self, "_ece_active_pair", None)
@@ -694,6 +744,16 @@ class BaseDriver(ABC):
         Ensures the patchright chromium browser is installed.
         Returns True if installation was performed/verified, False if failed.
         """
+        if self._is_termux_environment():
+            termux_browser = self._resolve_termux_chromium_executable()
+            if termux_browser:
+                Logger.info(f"Using Termux Chromium executable: {termux_browser}")
+                return True
+            raise RuntimeError(
+                "Termux Chromium executable was not found. Install it via `pkg install chromium` "
+                "or set IRP_CHROMIUM_EXECUTABLE to an absolute browser path."
+            )
+
         cached_path = BaseDriver._browser_executable_path
         if BaseDriver._browser_install_verified and cached_path and Path(cached_path).exists():
             return True
@@ -981,6 +1041,18 @@ class BaseDriver(ABC):
             persistent_sessions = bool(
                 self.config_manager.get_setting("system_settings", "persistent_sessions")
             )
+            headless_browser = self._use_headless_browser()
+            launch_args = self._get_browser_launch_args(headless=headless_browser)
+            termux_executable = (
+                self._resolve_termux_chromium_executable()
+                if self._is_termux_environment()
+                else None
+            )
+            browser_launch_options: dict[str, Any] = {"headless": headless_browser}
+            if launch_args:
+                browser_launch_options["args"] = launch_args
+            if termux_executable:
+                browser_launch_options["executable_path"] = termux_executable
             browser_context_options = self._get_browser_context_options()
 
             if browser_context_options.get("locale"):
@@ -992,6 +1064,9 @@ class BaseDriver(ABC):
                     "Provider browser timezone override enabled: "
                     f"{browser_context_options['timezone_id']}"
                 )
+            Logger.info(
+                f"Launching Chromium in {'headless' if headless_browser else 'headed'} mode."
+            )
 
             if persistent_sessions:
                 user_data_dir = self._get_persistent_profile_dir()
@@ -1004,7 +1079,7 @@ class BaseDriver(ABC):
                     os.makedirs(user_data_dir, exist_ok=True)
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir,
-                        headless=False,
+                        **browser_launch_options,
                         **browser_context_options,
                     )
                     context_browser = getattr(self.context, "browser", None)
@@ -1012,11 +1087,11 @@ class BaseDriver(ABC):
                 except Exception as e:
                     Logger.error(f"Failed to launch persistent context: {e}")
                     Logger.warning("Falling back to non-persistent session...")
-                    self.browser = await self.playwright.chromium.launch(headless=False)
+                    self.browser = await self.playwright.chromium.launch(**browser_launch_options)
                     self.context = await self.browser.new_context(**browser_context_options)
             else:
                 Logger.info("Launching Chromium...")
-                self.browser = await self.playwright.chromium.launch(headless=False)
+                self.browser = await self.playwright.chromium.launch(**browser_launch_options)
                 self.context = await self.browser.new_context(**browser_context_options)
 
             try:
